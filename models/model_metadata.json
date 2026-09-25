@@ -1,0 +1,31 @@
+{
+  "model_name": "LSTM (2-layer) + dense head, frozen Word2Vec (Google News 300d)",
+  "test_size": 3000,
+  "test_accuracy": 0.8893,
+  "micro_f1": 0.8893,
+  "macro_f1": 0.8893,
+  "per_class": {
+    "POLITICS": {
+      "precision": 0.9156,
+      "recall": 0.846,
+      "f1": 0.8794
+    },
+    "BUSINESS": {
+      "precision": 0.8459,
+      "recall": 0.928,
+      "f1": 0.8851
+    },
+    "SPORTS": {
+      "precision": 0.9132,
+      "recall": 0.894,
+      "f1": 0.9035
+    }
+  },
+  "vocab_size": 16194,
+  "w2v_missing_count": 4279,
+  "versions": {
+    "python": "3.12.4",
+    "tensorflow": "2.20.0",
+    "keras": "3.11.3"
+  }
+}
