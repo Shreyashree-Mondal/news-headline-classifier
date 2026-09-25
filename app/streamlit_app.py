@@ -1,27 +1,29 @@
-"""Streamlit front end for the News Headline Classifier API.
+"""Streamlit web app for the News Headline Classifier.
 
-Set the API address in .streamlit/secrets.toml (or Streamlit Cloud secrets):
-    API_URL = "https://<your-space>.hf.space"
-Falls back to the API_URL environment variable, then http://localhost:8000.
+Loads the saved LSTM and runs predictions in-process, reusing the exact
+preprocessing code from the FastAPI service (api/preprocess.py).
+
+Run locally (from the repo root):  streamlit run app/streamlit_app.py
 """
+import json
 import os
+import sys
+from pathlib import Path
 
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+
+import numpy as np
 import pandas as pd
-import requests
 import streamlit as st
 
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from api.preprocess import TextPipeline, clean_text  # noqa: E402
+
+MODEL_DIR = ROOT / "models"
+GITHUB_URL = "https://github.com/Shreyashree-Mondal/news-headline-classifier"
+
 st.set_page_config(page_title="Headline topic classifier", page_icon="📰", layout="centered")
-
-
-def get_api_url() -> str:
-    try:
-        url = st.secrets.get("API_URL")
-    except Exception:  # no secrets file locally
-        url = None
-    return (url or os.getenv("API_URL") or "http://localhost:8000").rstrip("/")
-
-
-API_URL = get_api_url()
 
 EXAMPLES = [
     "Senate passes budget bill after late-night vote",
@@ -31,20 +33,32 @@ EXAMPLES = [
 ]
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_model_info():
-    r = requests.get(f"{API_URL}/model-info", timeout=60)
-    r.raise_for_status()
-    return r.json()
+@st.cache_resource(show_spinner="Loading the model…")
+def load_model():
+    import keras
+
+    model = keras.models.load_model(MODEL_DIR / "news_lstm.keras", compile=False)
+    pipeline = TextPipeline.from_dir(MODEL_DIR)
+    meta_path = MODEL_DIR / "model_metadata.json"
+    metadata = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    return model, pipeline, metadata
 
 
 def classify(headline: str) -> dict:
-    r = requests.post(f"{API_URL}/predict", json={"headline": headline}, timeout=60)
-    if r.status_code == 422:
-        detail = r.json().get("detail")
-        raise ValueError(detail if isinstance(detail, str) else "Enter a headline with real words.")
-    r.raise_for_status()
-    return r.json()
+    model, pipeline, _ = load_model()
+    if not clean_text(headline):
+        raise ValueError("That headline has no letters or numbers left after cleaning. Enter real words.")
+    probs = np.asarray(model(pipeline.transform([headline]), training=False))[0]
+    words = pipeline.words(clean_text(headline))
+    ignored = pipeline.ignored_words(headline)
+    k = int(probs.argmax())
+    return {
+        "category": pipeline.labels[k],
+        "confidence": float(probs[k]),
+        "probabilities": {lbl: float(p) for lbl, p in zip(pipeline.labels, probs)},
+        "ignored_words": ignored,
+        "word_coverage": 1 - len([w for w in words if w in ignored]) / len(words),
+    }
 
 
 # ---------- Page ----------
@@ -52,7 +66,7 @@ st.title("Headline topic classifier")
 st.write(
     "Type a news headline and the model predicts whether it's about **politics**, "
     "**business** or **sports**. It's an LSTM trained on 15,000 HuffPost headlines "
-    "with pretrained Word2Vec embeddings, served through a FastAPI backend."
+    "with pretrained Word2Vec embeddings."
 )
 
 if "headline" not in st.session_state:
@@ -61,7 +75,7 @@ if "headline" not in st.session_state:
 st.caption("Try an example")
 cols = st.columns(2)
 for i, ex in enumerate(EXAMPLES):
-    if cols[i % 2].button(ex, key=f"ex{i}", use_container_width=True):
+    if cols[i % 2].button(ex, key=f"ex{i}", width="stretch"):
         st.session_state.headline = ex
 
 headline = st.text_area("Headline", key="headline", max_chars=300, height=90,
@@ -69,12 +83,9 @@ headline = st.text_area("Headline", key="headline", max_chars=300, height=90,
 
 if st.button("Classify headline", type="primary", disabled=not headline.strip()):
     try:
-        with st.spinner("Classifying… the first request can take up to a minute while the API wakes up."):
-            res = classify(headline.strip())
+        res = classify(headline.strip())
     except ValueError as e:
         st.error(str(e))
-    except requests.exceptions.RequestException:
-        st.error(f"Couldn't reach the API at {API_URL}. Check that it's running, then try again.")
     else:
         st.subheader(res["category"].title())
         st.write(f"Confidence: **{res['confidence']:.1%}**")
@@ -96,20 +107,19 @@ if st.button("Classify headline", type="primary", disabled=not headline.strip())
             st.warning("Low confidence. This headline may mix topics, or fall outside all three.")
 
 with st.expander("About the model"):
-    try:
-        info = fetch_model_info()
-    except requests.exceptions.RequestException:
-        st.write("Model details are unavailable while the API is unreachable.")
-    else:
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Test accuracy", f"{info.get('test_accuracy', 0):.1%}")
-        c2.metric("Macro F1", f"{info.get('macro_f1', 0):.3f}")
-        c3.metric("Test headlines", f"{info.get('test_size', 0):,}")
-        if info.get("per_class"):
-            st.dataframe(pd.DataFrame(info["per_class"]).T.rename(index=str.title), use_container_width=True)
-        st.write(
-            "Compared against a feed-forward network (87.0% accuracy) and a SimpleRNN (86.1%), "
-            "the LSTM performed best on every class. Embeddings are frozen, so words without a "
-            "Word2Vec vector contribute nothing to the prediction."
-        )
-    st.write(f"[API docs]({API_URL}/docs)")
+    _, _, info = load_model()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Test accuracy", f"{info.get('test_accuracy', 0):.1%}")
+    c2.metric("Macro F1", f"{info.get('macro_f1', 0):.3f}")
+    c3.metric("Test headlines", f"{info.get('test_size', 0):,}")
+    if info.get("per_class"):
+        st.dataframe(pd.DataFrame(info["per_class"]).T.rename(index=str.title), width="stretch")
+    st.write(
+        "Compared against a feed-forward network (87.0% accuracy) and a SimpleRNN (86.1%), "
+        "the LSTM performed best on every class. Embeddings are frozen, so words without a "
+        "Word2Vec vector contribute nothing to the prediction."
+    )
+    st.write(
+        f"The same model is also packaged as a FastAPI REST service in a Docker container, "
+        f"tested automatically on every push. [Code and results on GitHub]({GITHUB_URL})"
+    )
