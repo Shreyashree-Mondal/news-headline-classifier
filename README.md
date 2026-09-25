@@ -2,7 +2,7 @@
 
 Classifies news headlines as **Politics**, **Business** or **Sports** using neural networks on pretrained Word2Vec embeddings. The best model (a 2-layer LSTM) is packaged as a containerized **FastAPI** REST service, tested in CI on every push, and powers a live **Streamlit** web app.
 
-- **Live demo:** `<Streamlit app URL>`
+- **Live demo:** https://shreyashree-news-classifier.streamlit.app/
 
 ## Results
 
