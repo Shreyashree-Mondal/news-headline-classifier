@@ -1,0 +1,8 @@
+# Pinned to the versions the model was trained and saved with.
+tensorflow-cpu==2.20.0
+keras==3.11.3
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+numpy
+beautifulsoup4>=4.12
